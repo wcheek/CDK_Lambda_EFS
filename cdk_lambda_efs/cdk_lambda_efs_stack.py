@@ -31,7 +31,7 @@ class CdkLambdaEfsStack(Stack):
             scope=self,
             id="Efs",
             vpc=self.vpc,
-            file_system_name="DryerPredictionsEFS",
+            file_system_name="ExampleLambdaAttachedEFS",
             # Makes sure to delete EFS when stack goes down
             removal_policy=RemovalPolicy.DESTROY,
         )
@@ -52,7 +52,7 @@ class CdkLambdaEfsStack(Stack):
         _lambda.Function(
             self,
             "LambdaWithEFS",
-            runtime=_lambda.Runtime.PYTHON_3_9(),
+            runtime=_lambda.Runtime.PYTHON_3_9,
             # lambda function file name.handler function
             handler="lambda_EFS.handler",
             # Points to directory of lambda function
@@ -60,6 +60,6 @@ class CdkLambdaEfsStack(Stack):
             # Lambda needs to be in same VPC as EFS
             vpc=self.vpc,
             filesystem=_lambda.FileSystem.from_efs_access_point(
-                ap=self.access_point, mount_path="/mnt/models"
+                ap=self.access_point, mount_path="/mnt/filesystem"
             ) if self.access_point else None,
         )

@@ -1,3 +1,17 @@
+# Lambda function with persistent file store using AWS CDK and AWS EFS
+
+Have you ever wanted Lambda functions to be able to save and load files locally without needing to transfer data between an S3 b? This article is for you.
+
+By using `AWS EFS` we can [attach a persistent filesystem](https://aws.amazon.com/blogs/compute/using-amazon-efs-for-aws-lambda-in-your-serverless-applications/) to your Lambda function!
+
+## If starting from scratch
+
+1) `mkdir project && cd project`
+2) `cdk init --language python`
+3) Follow instructions below to activate venv, install libraries.
+4) Make sure you have activated your AWS credentials and `cdk deploy`
+
+
 
 # Welcome to your CDK Python project!
 
