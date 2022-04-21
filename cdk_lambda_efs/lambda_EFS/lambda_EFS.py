@@ -1,2 +1,12 @@
+from pathlib import Path
+
+
 def handler(event, context):
-    return "Hello Lambda!"
+    # Writing to a file on the EFS filesystem
+    path = Path("/mnt/filesystem/test.txt")
+    with path.open("r") as f:
+        f.write("Test123")
+    # Now open the file, read the text, return
+    with path.open("w") as f:
+        text = f.read()
+    return f"Hello Lambda! {text}"
