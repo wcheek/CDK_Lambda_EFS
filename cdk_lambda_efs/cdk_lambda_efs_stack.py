@@ -49,6 +49,7 @@ class CdkLambdaEfsStack(Stack):
         )
 
     def build_lambda_func(self):
+        # I'm just using the normal CDK lambda function here. See my other articles for additional building methods.
         _lambda.Function(
             self,
             "LambdaWithEFS",

@@ -1,6 +1,6 @@
 # Lambda function with persistent file store using AWS CDK and AWS EFS
 
-Have you ever wanted Lambda functions to be able to save and load files locally without needing to transfer data between an S3 b? This article is for you.
+Have you ever wanted Lambda functions to be able to save and load files locally without needing to transfer data between an S3 bucket? This article is for you.
 
 By using `AWS EFS` we can [attach a persistent filesystem](https://aws.amazon.com/blogs/compute/using-amazon-efs-for-aws-lambda-in-your-serverless-applications/) to your Lambda function!
 
@@ -26,94 +26,112 @@ Once you have set up CDK, we need to set up the project:
 
 ## Stack design
 
-Our stack will deploy only a lambda function. The lambda function will be built using `Docker`, so be sure to have `Docker` installed and the `Docker` daemon running.
+Our CDK stack is going to deploy an `EFS` filesystem, a Lambda function, and an access point which will allow us to attach the filesystem to the function.
+
+### cdk_lambda_efs/cdk_lambda_efs_stack.py
 
 ```python
-# cdk_docker_lambda/cdk_docker_lambda_stack.py
-
 from aws_cdk import Stack
+from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_efs as efs
 from aws_cdk import aws_lambda as _lambda
 from constructs import Construct
+from aws_cdk import RemovalPolicy
 
 
-class CdkDockerLambdaStack(Stack):
+class CdkLambdaEfsStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # I like to define all my pieces in __init__
+        self.vpc = None
+        self.access_point = None
+        self.lambda_func = None
+
+        self.build_infrastructure()
+
+    def build_infrastructure(self):
+        self.build_vpc()
+        self.build_filesystem()
         self.build_lambda_func()
 
-    def build_lambda_func(self):
-        self.prediction_lambda = _lambda.DockerImageFunction(
+    def build_vpc(self):
+        # Build the VPC where both EFS and Lambda will sit
+        self.vpc = ec2.Vpc(self, "VPC")
+
+    def build_filesystem(self):
+        file_system = efs.FileSystem(
             scope=self,
-            id="ExampleDockerLambda",
-            # Function name on AWS
-            function_name="ExampleDockerLambda",
-            # Use aws_cdk.aws_lambda.DockerImageCode.from_image_asset to build
-            # a docker image on deployment
-            code=_lambda.DockerImageCode.from_image_asset(
-                # Directory relative to where you execute cdk deploy
-                # contains a Dockerfile with build instructions
-                directory="cdk_docker_lambda/ExampleDockerLambda"
+            id="Efs",
+            vpc=self.vpc,
+            file_system_name="ExampleLambdaAttachedEFS",
+            # Makes sure to delete EFS when stack goes down
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        # create a new access point from the filesystem
+        self.access_point = file_system.add_access_point(
+            "AccessPoint",
+            # set /export/lambda as the root of the access point
+            path="/export/lambda",
+            # as /export/lambda does not exist in a new efs filesystem, the efs will create the directory with the following createAcl
+            create_acl=efs.Acl(
+                owner_uid="1001", owner_gid="1001", permissions="750"
             ),
+            # enforce the POSIX identity so lambda function will access with this identity
+            posix_user=efs.PosixUser(uid="1001", gid="1001"),
+        )
+
+    def build_lambda_func(self):
+        # I'm just using the normal CDK lambda function here. See my other articles for additional building methods.
+        _lambda.Function(
+            self,
+            "LambdaWithEFS",
+            runtime=_lambda.Runtime.PYTHON_3_9,
+            # lambda function file name.handler function
+            handler="lambda_EFS.handler",
+            # Points to directory of lambda function
+            code=_lambda.Code.from_asset("cdk_lambda_efs/lambda_EFS"),
+            # Lambda needs to be in same VPC as EFS
+            vpc=self.vpc,
+            filesystem=_lambda.FileSystem.from_efs_access_point(
+                ap=self.access_point, mount_path="/mnt/filesystem"
+            ) if self.access_point else None,
         )
 
 ```
 
 ## Lambda function
 
-Create a new directory in `cdk_docker_lambda` called `ExampleDockerLambda`. Here we are going to put a `Dockerfile`, `requirements.txt` which holds our function’s dependencies, and the lambda function itself, `example_docker_lambda.py`
+I will deploy a lambda function without any additional dependencies. If you need dependencies, you will need to use different `CDK` constructs to do it. [Here is an example of using aws_lambda_python_alpha](https://dev.to/wesleycheek/deploy-an-api-fronted-lambda-function-using-aws-cdk-2nch) and [here is an example of building using Docker](https://dev.to/wesleycheek/deploy-a-docker-built-lambda-function-with-aws-cdk-fio).
 
-### cdk_docker_lambda/ExampleDockerLambda/Dockerfile
+This lambda function opens a file on the `EFS` filesystem, writes a string to it, then opens it again and returns the result.
 
-```dockerfile
-FROM amazon/aws-lambda-python:latest
-
-LABEL maintainer="Wesley Cheek"
-# Installs python, removes cache file to make things smaller
-RUN yum update -y && \
-    yum install -y python3 python3-dev python3-pip gcc && \
-    rm -Rf /var/cache/yum
-# Be sure to copy over the function itself!
-COPY example_docker_lambda.py ./
-# Copies requirements.txt file into the container
-COPY requirements.txt ./
-# Installs dependencies found in your requirements.txt file
-RUN pip install -r requirements.txt
-
-# Points to the handler function of your lambda function
-CMD ["example_docker_lambda.handler"]
-```
-
-### cdk_docker_lambda/ExampleDockerLambda/requirements.txt
-
-```
-requests
-```
-
-### cdk_docker_lambda/ExampleDockerLambda/example_docker_lambda.py
+### cdk_lambda_efs/lambda_EFS/lambda_EFS.py
 
 ```python
-# Very simple
+from pathlib import Path
 
-import requests
 
 def handler(event, context):
-    return "Hello Lambda!"
+    # Writing to a file on the EFS filesystem
+    path = Path("/mnt/filesystem/test.txt")
+    with path.open("w") as f:
+        f.write("Test123")
+    # Now open the file, read the text, return
+    with path.open("r") as f:
+        text = f.read()
+    return f"Hello Lambda! {text}"
 
 ```
 
-Now `cdk deploy`. `AWS CDK` will build your new Lambda function using `Docker` and then push it for you to the `ECR` repository that was originally created for you by running `cdk bootstrap` during the CDK setup. How convenient. 
+## Test the lambda function with attached filesystem
 
-After the image is built and pushed, CDK will deploy the necessary infrastructure. You can navigate to the `AWS CloudFormation` console to view the deployment. It should only take a couple minutes. 
+Navigate to the Lambda console on AWS. First notice the filesystem has been successfully attached to your lambda function
 
-Once finished, you will find your beautful `Docker` deployed Lambda function on the Lambda console
+![attached_filesystem](D:\Projects\Notes\My Articles\4_CDK_Lambda_EFS\Assets\attached_filesystem.png)
 
-![lambda func](D:\Projects\Notes\My Articles\3_CDK_Docker_Lambda\Assets\lambda func.png)
+Now go ahead and test it using any kind of event.
 
-### Test your Lambda function
+![image-20220421130248278](D:\Projects\Notes\My Articles\4_CDK_Lambda_EFS\Assets\image-20220421130248278.png)
 
-We can use any kind of event since the function always just returns a string.
-
-![image-20220421105909196](D:\Projects\Notes\My Articles\3_CDK_Docker_Lambda\Assets\image-20220421105909196.png)
-
-Have fun easily deploying any sized Lambda you’d like using `AWS CDK` and `Docker`!
+I hope this article has helped you to solve your problem of lambda not persisting data. EFS is an easy to use and versatile solution to memory problems.
